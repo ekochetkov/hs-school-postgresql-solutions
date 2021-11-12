@@ -1,0 +1,77 @@
+#+TITLE: Structured Query Language - HW day 2
+#+AUTHOR: M. Surmashev @muradbei
+#+PROPERTY: header-args:sql :engine postgresql :dbport 5400 :dbhost localhost :dbuser postgres :dbpassword postgres :database postgres
+
+* Largest Organization
+
+  В таблице со списком огранизаций, найти головную организацию с наибольшим числом отделений (с учетом головной огранизации).
+
+** Входные данные
+
+   #+BEGIN_SRC sql
+     create table organization (
+       id int,
+       parent int,
+       name text
+     );
+   #+END_SRC
+
+   #+BEGIN_SRC sql
+     insert into organization (id, parent, name)
+     values (1, null, 'ГКБ 1')
+	    ,(2, null, 'ГКБ 2')
+	    ,(3, 1, 'Детское отделение')
+	    ,(4, 3, 'Правое крыло')
+	    ,(5, 4, 'Кабинет педиатра')
+	    ,(6, 2, 'Хирургия')
+	    ,(7, 6, 'Кабинет 1')
+	    ,(8, 6, 'Кабинет 2')
+	    ,(9, 6, 'Кабинет 3')
+   #+END_SRC
+
+** Ожидаемый результат
+
+   | name  | cnt |
+   |-------+-----|
+   | ГКБ 2 |   5 |
+
+** Решение
+
+   #+BEGIN_SRC sql
+    WITH RECURSIVE orgs AS
+    (
+      SELECT
+        *,
+        id head
+      FROM
+        organization
+      WHERE
+        parent IS NULL
+
+      UNION
+
+      SELECT
+        o.*,
+        orgs.head head
+      FROM
+        orgs AS orgs
+      JOIN organization AS o
+        ON o.parent = orgs.id
+    )
+
+    SELECT
+      name,
+      cnt
+    FROM (
+      SELECT
+        *,
+        COUNT(*) over(PARTITION BY head) AS cnt
+      FROM
+        orgs
+      ) AS t
+    WHERE
+      parent IS NULL
+    ORDER BY
+      cnt DESC
+    LIMIT 1;
+   #+END_SRC
