@@ -49,8 +49,34 @@
    #+BEGIN_SRC sql
      ALTER TABLE organization 
        ADD COLUMN pth int[];
-   #+END_SRC
+       
+    WITH RECURSIVE orgs AS
+    (
+      SELECT
+        id,
+        '{}'::int[] pth
+      FROM
+        organization
+      WHERE
+        parent IS NULL
+        
+      UNION
+      
+      SELECT
+        o.id,
+        orgs.pth || o.parent
+      FROM
+        orgs AS orgs
+      JOIN organization AS o
+        ON o.parent = orgs.id
+    )
 
-   #+BEGIN_SRC sql
-
+    UPDATE
+      organization
+    SET
+      pth = orgs.pth
+    FROM
+      orgs
+    WHERE
+      orgs.id = organization.id;
    #+END_SRC   

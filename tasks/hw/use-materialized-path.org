@@ -1,0 +1,27 @@
+* Use materialized path
+
+  Используя материализованный путь, найти все отделения принадлежащие =ГКБ 2=
+
+** Ожидаемый результат
+
+   #+RESULTS:
+   | id | parent | name      | pth   |
+   |----+--------+-----------+-------|
+   |  6 |      2 | Хирургия  | {2}   |
+   |  7 |      6 | Кабинет 1 | {2,6} |
+   |  8 |      6 | Кабинет 2 | {2,6} |
+   |  9 |      6 | Кабинет 3 | {2,6} |
+
+** Решение
+
+   #+BEGIN_SRC sql
+      SELECT
+         o.id,
+         o.parent,
+         o.name,
+         o.pth
+      FROM
+         organization o JOIN organization o2
+            ON o2.name = 'ГКБ 2'
+      WHERE o.pth[1] = o2.id 
+   #+END_SRC   
