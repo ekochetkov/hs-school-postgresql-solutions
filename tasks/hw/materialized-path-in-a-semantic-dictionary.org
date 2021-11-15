@@ -1,6 +1,8 @@
 * Materialized path in a semantic dictionary
 
 ** Решение
+
+   #+BEGIN_SRC sql
     WITH RECURSIVE path_by_code AS
     (
       SELECT
