@@ -1,0 +1,37 @@
+* Materialized path in a semantic dictionary
+
+** Решение
+    WITH RECURSIVE path_by_code AS
+    (
+      SELECT
+        code,
+        '[]'::jsonb || concat(
+          '{"code":"',code,'","desc":"',"desc",'"}'
+      )::jsonb path
+      FROM
+        codes
+      WHERE
+        strpos(code, '.') = 0
+        
+      UNION
+      
+      SELECT
+        c.code,
+        path || concat(
+        '{"code":"',c.code,'","desc":"',c."desc",'"}'
+      )::jsonb path
+      FROM
+        path_by_code
+      JOIN codes AS c
+        ON c.code SIMILAR TO concat(path_by_code.code,'\.','[A-z0-9]+')
+    )
+
+    UPDATE
+      items
+    SET
+      path = path_by_code.path
+    FROM
+      path_by_code
+    WHERE
+      items.code = path_by_code.code;
+   #+END_SRC   
