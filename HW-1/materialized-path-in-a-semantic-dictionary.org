@@ -9,7 +9,7 @@
         code,
         '[]'::jsonb || concat(
           '{"code":"',code,'","desc":"',"desc",'"}'
-      )::jsonb path
+        )::jsonb path
       FROM
         codes
       WHERE
@@ -20,8 +20,8 @@
       SELECT
         c.code,
         path || concat(
-        '{"code":"',c.code,'","desc":"',c."desc",'"}'
-      )::jsonb path
+          '{"code":"',c.code,'","desc":"',c."desc",'"}'
+        )::jsonb path
       FROM
         path_by_code
       JOIN codes AS c
