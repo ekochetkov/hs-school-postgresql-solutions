@@ -131,7 +131,7 @@
 
 ** Решение
 
-   #+BEGIN_SRC json
+   #+BEGIN_SRC sql
     WITH RECURSIVE
       keys AS
     (
