@@ -1,0 +1,161 @@
+#+TITLE: JSONB - HW day 2
+#+AUTHOR: M. Surmashev @muradbei
+#+SETUPFILE: https://fniessen.github.io/org-html-themes/org/theme-readtheorg.setup
+#+PROPERTY: header-args:sql :engine postgresql :dbport 5400 :dbhost localhost :dbuser postgres :dbpassword postgres :database postgres
+
+* Database stats
+
+  Extract database usage statistics for all tables in one query that return single JSONB object
+
+  *Support material:*
+  - [[https://postgrespro.ru/docs/postgresql/13/functions-admin#FUNCTIONS-ADMIN-DBSIZE][DB object size functions]] - the functions calculate the disk space usage of database objects,
+    or assist in presentation of usage results.
+  - [[https://postgrespro.ru/docs/postgresql/12/catalog-pg-class?lang=en][pg_class]] - core postgresql table
+  - [[https://www.postgresql.org/docs/13/information-schema.html][information-schema]] - db schema with related database information
+
+  *Structure of return object:*
+
+  #+BEGIN_SRC json
+    {"<SCHEMA>": {
+	"<TABLENAME>": {
+	    "rows": "<ROWS_ESTIMATE>",
+	    "index_size": "<TOTAL_INDEX_SIZE>",
+	    "table_size": "<TABLE_SIZE>",
+	    "index": {
+		"<INDEXNAME>": {
+		    "size": "<INDEX_SIZE>",
+		    "type": "<INDEX_TYPE>"
+		}
+	    }
+	}
+    }}
+  #+END_SRC
+
+  *Example of result:*
+
+  #+BEGIN_SRC json
+    {"public": {
+	"app": {
+	    "rows": 1,
+	    "index": {
+		"app_pkey": {
+		    "size": "16 kB",
+		    "type": "btree"
+		}
+	    },
+	    "index_size": "16 kB",
+	    "table_size": "8192 bytes"
+	},
+	"flag": {
+	    "rows": 3262,
+	    "index": {
+		"flag_pkey": {
+		    "size": "312 kB",
+		    "type": "btree"
+		},
+		"flag_resource_subject": {
+		    "size": "328 kB",
+		    "type": "btree"
+		},
+		"flag_resource_period_end": {
+		    "size": "160 kB",
+		    "type": "btree"
+		},
+		"flag_resource_gin_jsquery": {
+		    "size": "776 kB",
+		    "type": "gin"
+		}
+	    },
+	    "index_size": "1600 kB",
+	    "table_size": "2432 kB"
+	}
+    },
+     "information_schema": {
+	 "sql_parts": {
+	     "rows": 9,
+	     "index": null,
+	     "index_size": "0 bytes",
+	     "table_size": "8192 bytes"
+	 },
+	 "parameters": {
+	     "rows": 0,
+	     "index": {
+		 "parameters_pkey": {
+		     "size": "8192 bytes",
+		     "type": "btree"
+		 }
+	     },
+	     "index_size": "8192 bytes",
+	     "table_size": "0 bytes"
+	 }
+     }
+    }
+  #+END_SRC
+
+** Решение
+
+   #+BEGIN_SRC sql
+	WITH indexex_info AS ( 
+
+		SELECT
+			n.nspname AS schemaname,
+			c.relname AS tablename,
+			i.relname AS indexname,
+			jsonb_build_object(
+				'size', pg_size_pretty(pg_indexes_size(indrelid)),
+				'type', am.amname
+			) AS jsonb_data
+		FROM
+		(
+			(
+				(
+					(
+					pg_index x JOIN pg_class c ON c.oid = x.indrelid
+					)
+					JOIN pg_class i ON i.oid = x.indexrelid
+				)
+				JOIN pg_am am ON am.oid=i.relam
+				LEFT JOIN pg_namespace n ON n.oid = c.relnamespace
+			)
+			LEFT JOIN pg_tablespace t ON t.oid = i.reltablespace
+		)
+		WHERE
+		(
+			c.relkind = ANY (ARRAY['r'::"char", 'm'::"char", 'p'::"char"])
+				AND
+			i.relkind = ANY (ARRAY['i'::"char", 'I'::"char"])
+		)
+		AND
+			n.nspname not in ('pg_catalog')
+
+	), tables_info AS (
+
+		SELECT
+			c.oid,
+			n.nspname AS table_schema,
+			c.relname AS table_name,
+			jsonb_build_object(
+				'rows', c.reltuples,
+				'table_size', pg_size_pretty(pg_table_size(c.oid)),
+				'index_size', pg_size_pretty(pg_indexes_size(c.oid)),
+				'index', jsonb_object_agg(indexex_info.indexname, indexex_info.jsonb_data)
+			) AS jsonb_data
+		FROM pg_class c
+			JOIN pg_namespace n ON n.oid = c.relnamespace
+			JOIN indexex_info ON n.nspname = indexex_info.schemaname AND c.relname = indexex_info.tablename
+		GROUP by
+			c.oid, table_schema, table_name, c.reltuples
+
+	), schemas_info AS (
+
+		SELECT
+			table_schema,
+			jsonb_object_agg(table_name, jsonb_data)
+		FROM
+			tables_info
+		GROUP BY
+			table_schema
+	)
+
+	SELECT jsonb_pretty( jsonb_object_agg(table_schema, jsonb_object_agg) ) FROM schemas_info;
+   #+END_SRC
