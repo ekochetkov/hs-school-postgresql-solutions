@@ -1,0 +1,118 @@
+#+TITLE: QOPT - HW day 2
+#+AUTHOR: M. Surmashev @muradbei
+#+SETUPFILE: https://fniessen.github.io/org-html-themes/org/theme-readtheorg.setup
+#+PROPERTY: header-args:sql :engine postgresql :dbport 5400 :dbhost localhost :dbuser postgres :dbpassword postgres :database postgres
+
+* Find Encounters
+
+  Максимально эффективно найти ~Encounter~ проведенные в январе 2020 года.
+
+  Время проведения ~Encounter~ находится в ~{period}~. Искать именно на пересечение интервалов. На часовые пояса можно не обращать внимание.
+
+  #+BEGIN_SRC sql
+    select jsonb_pretty(resource#>'{period}') as period
+      from encounter
+     limit 1
+  #+END_SRC
+
+  #+RESULTS:
+  | period                               |
+  |--------------------------------------|
+  | {                                    |
+  | "end": "2017-01-22T10:06:40+03:00",  |
+  | "start": "2017-01-22T09:51:40+03:00" |
+  | }                                    |
+
+  В качестве ответа предоставить запросы на создание индексов, сам поисковый запрос, план и результат его выполнения.
+
+  * Запрос
+  #+BEGIN_SRC sql
+    select
+        id,
+        resource#>>'{type,0,text}'
+        encounter_name,
+        resource#>>'{period,start}' period_start,
+        resource#>>'{period,end}' period_end
+    from
+        encounter                            
+    where
+        (resource#>>'{period,end}')::timestamptz   between '2020-01-01' and '2020-01-31' and 
+        (resource#>>'{period,start}')::timestamptz between '2020-01-01' and '2020-01-31'  
+  #+END_SRC
+
+  * Исходный план выполнения
+  #+BEGIN_SRC
+    Gather (actual rows=268 loops=1)
+      Workers Planned: 2
+      Workers Launched: 2
+      Buffers: shared hit=1120 read=12905
+      ->  Parallel Seq Scan on encounter (actual rows=89 loops=3)
+            Filter: ((((resource #>> '{period,end}'::text[]))::timestamp with time zone >= '2020-01-01 00:00:00+00'::timestamp with time zone) AND (((resource #>> '{period,end}'::text[]))::timestamp with time zone <= '2020-01-31 00:00:00+00'::timestamp with time zone) AND (((resource #>> '{period,start}'::text[]))::timestamp with time zone >= '2020-01-01 00:00:00+00'::timestamp with time zone) AND (((resource #>> '{period,start}'::text[]))::timestamp with time zone <= '2020-01-31 00:00:00+00'::timestamp with time zone))
+            Rows Removed by Filter: 18628
+            Buffers: shared hit=1120 read=12905
+    Planning Time: 0.094 ms
+    Execution Time: 100.800 ms
+  #+END_SRC
+
+  * Создание индексов
+  #+BEGIN_SRC sql
+    create or replace function ttz_immutable_for_index(d text)
+    returns timestamptz
+    language sql
+    immutable
+    as $$ select timestamptz(d) $$;
+
+    create index encounter_period_start_date_imm on encounter (  ( ttz_immutable_for_index((resource#>>'{period,start}')) ) );
+    create index encounter_period_end_date_imm   on encounter (  ( ttz_immutable_for_index((resource#>>'{period,end}'  )) ) );
+  #+END_SRC
+
+  * Дополненный запрос
+  #+BEGIN_SRC sql
+    select
+        id,
+        resource#>>'{type,0,text}'
+        encounter_name,
+        resource#>>'{period,start}' period_start,
+        resource#>>'{period,end}' period_end
+    from
+        encounter                            
+    where
+    ttz_immutable_for_index(resource#>>'{period,end}') between
+            ttz_immutable_for_index('2020-01-01') and
+            ttz_immutable_for_index('2020-01-31')
+        and  ttz_immutable_for_index(resource#>>'{period,start}') between
+            ttz_immutable_for_index('2020-01-01') and
+            ttz_immutable_for_index('2020-01-31')      
+  #+END_SRC
+
+  * План выполнения после создания индексов
+  #+BEGIN_SRC
+    Bitmap Heap Scan on encounter (actual rows=268 loops=1)
+      Recheck Cond: ((ttz_immutable_for_index((resource #>> '{period,end}'::text[])) >= '2020-01-01 00:00:00+00'::timestamp with time zone) AND (ttz_immutable_for_index((resource #>> '{period,end}'::text[])) <= '2020-01-31 00:00:00+00'::timestamp with time zone) AND (ttz_immutable_for_index((resource #>> '{period,start}'::text[])) >= '2020-01-01 00:00:00+00'::timestamp with time zone) AND (ttz_immutable_for_index((resource #>> '{period,start}'::text[])) <= '2020-01-31 00:00:00+00'::timestamp with time zone))
+      Heap Blocks: exact=264
+      Buffers: shared hit=270
+      ->  BitmapAnd (actual rows=0 loops=1)
+            Buffers: shared hit=6
+            ->  Bitmap Index Scan on encounter_period_end_date_imm (actual rows=270 loops=1)
+                  Index Cond: ((ttz_immutable_for_index((resource #>> '{period,end}'::text[])) >= '2020-01-01 00:00:00+00'::timestamp with time zone) AND (ttz_immutable_for_index((resource #>> '{period,end}'::text[])) <= '2020-01-31 00:00:00+00'::timestamp with time zone))
+                  Buffers: shared hit=3
+            ->  Bitmap Index Scan on encounter_period_start_date_imm (actual rows=268 loops=1)
+                  Index Cond: ((ttz_immutable_for_index((resource #>> '{period,start}'::text[])) >= '2020-01-01 00:00:00+00'::timestamp with time zone) AND (ttz_immutable_for_index((resource #>> '{period,start}'::text[])) <= '2020-01-31 00:00:00+00'::timestamp with time zone))
+                  Buffers: shared hit=3
+    Planning Time: 0.634 ms
+    Execution Time: 1.663 ms
+  #+END_SRC
+
+  * Результат выполнения
+
+    Всего 268 записей
+
+  #+BEGIN_SRC
+    |                                   id |                             encounter_name |              period_start |                period_end | 
+    |--------------------------------------|--------------------------------------------|---------------------------|---------------------------| 
+    | 0245d552-be46-f5b4-6fef-a3a001abed71 |                 Consultation for treatment | 2020-01-10T22:41:13+03:00 | 2020-01-10T22:56:13+03:00 | 
+    | 02699cba-8cba-e2f3-85c0-d27f985dd0c5 |                     Prenatal initial visit | 2020-01-01T12:20:37+03:00 | 2020-01-01T12:35:37+03:00 | 
+    | 03276358-0a7c-cdc9-0bdf-a2adda0fa6b2 |                             Prenatal visit | 2020-01-12T14:36:04+03:00 | 2020-01-12T14:51:04+03:00 | 
+    |                                  ... |                                        ... |                       ... |                       ... | 
+    | ff28b4a3-7252-0313-c193-94b0691e4ad2 | General examination of patient (procedure) | 2020-01-02T20:45:26+03:00 | 2020-01-02T21:00:26+03:00 |
+  #+END_SRC  
