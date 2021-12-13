@@ -1,0 +1,126 @@
+#+TITLE: QOPT - HW day 1
+#+AUTHOR: M. Surmashev @muradbei
+#+SETUPFILE: https://fniessen.github.io/org-html-themes/org/theme-readtheorg.setup
+#+PROPERTY: header-args:sql :engine postgresql :dbport 5400 :dbhost localhost :dbuser postgres :dbpassword postgres :database postgres
+
+* Find the heaviest patient
+
+  Максимально эффективно найти самого тяжелого пациента. Показания веса находятся в таблице ~Observation~.
+
+  Значение веса закодированное следующим образом:
+
+  #+BEGIN_SRC json
+    {"code": {"coding": [{"code": "29463-7", "system": "http://loinc.org"}]}}
+  #+END_SRC
+
+  Само значение веса находится в ~{valueQuantity,value}~
+
+  Пример ресурса с показателем массы тела
+
+  #+BEGIN_SRC sql :results value drawer
+    select id,jsonb_pretty(resource)
+      from observation
+     where id = '091e1985-d8aa-6ac5-d780-4f9f18d85b5d'
+  #+END_SRC
+
+  В качестве ответа предоставить запросы на создание индексов, сам поисковый запрос, план и результат его выполнения.
+  В конечном результате вывести имя и вес самого тяжелого пациента.
+
+  ** Решение
+
+  * Запрос
+  #+BEGIN_SRC sql
+    select
+        trim( concat(
+            official_name#>>'{prefix,0}', ' ',
+            official_name#>>'{given,0}', ' ',
+            official_name#>>'{family}'
+        )) as name,
+        weight,
+        patient_id,
+        observation_id
+    from (
+        select
+            p.id patient_id,
+            o.id observation_id,
+            jsonb_path_query(p.resource, '$.name[*] ? (@.use == "official")') official_name,
+            o.resource #>>'{valueQuantity,value}' weight
+        from observation o join patient p on o.resource->'subject'->>'id' = p.id
+        where not o.resource #>>'{valueQuantity,value}' is null 
+        order by weight desc
+        limit 1
+    ) t;
+  #+END_SRC
+
+  * Исходный план выполнения
+  #+BEGIN_SRC
+    Subquery Scan on t (actual rows=1 loops=1)
+      Buffers: shared hit=16553 read=36980, temp read=1485 written=13189
+      ->  Limit (actual rows=1 loops=1)
+            Buffers: shared hit=16553 read=36980, temp read=1485 written=13189
+            ->  ProjectSet (actual rows=1 loops=1)
+                  Buffers: shared hit=5370 read=12220, temp read=495 written=4344
+                  ->  Gather Merge (actual rows=1 loops=1)
+                        Workers Planned: 2
+                        Workers Launched: 2
+                        Buffers: shared hit=16550 read=36980, temp read=1485 written=13189
+                        ->  Result (actual rows=88 loops=3)
+                              Buffers: shared hit=16550 read=36980, temp read=1485 written=13189
+                              ->  Sort (actual rows=88 loops=3)
+                                    Sort Key: ((o.resource #>> '{valueQuantity,value}'::text[])) DESC
+                                    Sort Method: external merge  Disk: 34672kB
+                                    Worker 0:  Sort Method: external merge  Disk: 35704kB
+                                    Worker 1:  Sort Method: external merge  Disk: 34896kB
+                                    Buffers: shared hit=16550 read=36980, temp read=1485 written=13189
+                                    ->  Hash Join (actual rows=108313 loops=3)
+                                          Hash Cond: (((o.resource -> 'subject'::text) ->> 'id'::text) = p.id)
+                                          Buffers: shared hit=16476 read=36980
+                                          ->  Parallel Seq Scan on observation o (actual rows=108313 loops=3)
+                                                Filter: ((resource #>> '{valueQuantity,value}'::text[]) IS NOT NULL)
+                                                Rows Removed by Filter: 15140
+                                                Buffers: shared hit=16154 read=36980
+                                          ->  Hash (actual rows=1182 loops=3)
+                                                Buckets: 2048  Batches: 1  Memory Usage: 563kB
+                                                Buffers: shared hit=234
+                                                ->  Seq Scan on patient p (actual rows=1182 loops=3)
+                                                      Buffers: shared hit=234
+    Planning Time: 0.396 ms
+    Execution Time: 1391.040 ms
+  #+END_SRC
+
+  * Создание индексов
+  #+BEGIN_SRC sql
+    create index observation_weight on observation ((resource #>>'{valueQuantity,value}'));
+  #+END_SRC
+
+  * План выполнения после создания индексов
+  #+BEGIN_SRC
+    Subquery Scan on t (actual rows=1 loops=1)
+    Buffers: shared hit=55 read=3
+    ->  Limit (actual rows=1 loops=1)
+            Buffers: shared hit=55 read=3
+            ->  ProjectSet (actual rows=1 loops=1)
+                Buffers: shared hit=55 read=3
+                ->  Nested Loop (actual rows=1 loops=1)
+                        Join Filter: (((o.resource -> 'subject'::text) ->> 'id'::text) = p.id)
+                        Rows Removed by Join Filter: 869
+                        Buffers: shared hit=52 read=3
+                        ->  Index Scan Backward using observation_weight on observation o (actual rows=1 loops=1)
+                            Index Cond: ((resource #>> '{valueQuantity,value}'::text[]) IS NOT NULL)
+                            Buffers: shared hit=1 read=3
+                        ->  Materialize (actual rows=870 loops=1)
+                            Buffers: shared hit=51
+                            ->  Seq Scan on patient p (actual rows=870 loops=1)
+                                    Buffers: shared hit=51
+    Planning Time: 0.944 ms
+    Execution Time: 1.376 ms
+  #+END_SRC
+
+  * Результат выполнения
+  #+BEGIN_SRC
+    "name"              "Mrs. Mariana775 Arreola736"		
+    "weight"            "999.62"	
+    "patient_id"        "a290a0ef-2995-d113-33ff-2cc1b9ae42d9"
+    "observation_id"    "df9675b0-e01d-eff5-69ee-50cd6df5bc29"
+  #+END_SRC
+
