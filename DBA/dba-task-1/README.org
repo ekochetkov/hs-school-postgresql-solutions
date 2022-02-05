@@ -1,0 +1,139 @@
+#+TITLE: Postgres DBA - 1
+#+AUTHOR: E. Kochetkov @pixfix
+#+PROPERTY: header-args:sql :engine postgresql :dbport 5440 :dbhost localhost :dbuser postgres :dbpassword postgres :database postgres
+
+* Postgres replica in action on Grafana 
+
+#+caption: Screenshots of replication lag and slots panels
+[[./dashboard-1.jpg]]
+
+#+caption: Screenshots of tables and current queries grouped by state panels
+[[./dashboard-2.jpg]]
+
+* Create replica (Manual method)
+
+** 1. Build and run db-master container
+
+#+begin_src shell
+docker compose -f master.yaml up --build --detach 
+#+end_src
+  
+** 2. Make basebackup with pg_basebackup tool
+   
+In the master container make basebackup to store data to /db-slave-pgdata-dir:
+
+#+begin_src shell
+pg_basebackup --pgdata=/db-slave-pgdata-dir --format=p --no-password --wal-method=stream --checkpoint=fast --progress --verbose --username=postgres
+#+end_src
+
+** 3. On master db create replica slot
+
+#+begin_src sql
+select pg_create_physical_replication_slot('replica');
+#+end_src
+   
+** 4. Modify basebackup config for start replica container 
+ 
++ In the file ~/db-slave-pgdata-dir/postgresql.conf~ uncomment and set parameters:
+  - primary_conninfo='host=db-master port=5432 user=postgres password=postgres'
+  - primary_slot_name='replica'
+
++ Create file ~/db-slave-pgdata-dir/standby.signal~
+#+begin_src shell
+touch ./db-slave-pgdata-dir/standby.signal
+#+end_src
+
+** 5. Build and run db-slave container
+
+#+begin_src shell
+docker compose -f slave.yaml up --build --detach 
+#+end_src
+
+** 6. On master check replications active
+
+#+begin_src sql
+select * from pg_replication_slots
+#+end_src
+
+** 7. Build and run audit container
+
+#+begin_src shell
+docker compose -f audit.yaml up --build --detach 
+#+end_src
+
+** 8. Go to Grafana web interface
+
++ [[http://localhost:3000/login]]
++ Login/password: admin/admin
++ Setup default data source: db-master:5432, postgres, postgres, not use TLS/SSL!
++ Import dashboard from file ~PG Replication and queries.json~
+
+** 9. Use pgbench for load emulation
+
++ On master node initialize pgbench data: ~pgbench -U postgres --initialize~
++ Run bench test: ~pgbench -U postgres --client=5 --time=60 --progress=1~
+
+* Create replica (Automatic method)
+
+** Build and run auto-slave container
+
+#+begin_src shell
+docker compose -f slave-auto.yaml up --build --detach 
+#+end_src
+
+See files ~slave-auto.yaml~ and ~entry-point.sh~ for more details.
+* SQL queryes for dashboard panels
+
+** Replication lag:
+
+#+begin_src sql
+SELECT
+  slot_name,
+  COALESCE(write_lag, make_interval()) write_lag,
+  COALESCE(flush_lag, make_interval()) flush_lag,
+  COALESCE(replay_lag, make_interval()) replay_lag
+FROM pg_replication_slots rs left join pg_stat_replication sr on rs.active_pid = sr.pid
+ORDER BY 1
+#+end_src
+
+** Tables
+
+#+begin_src sql
+SELECT
+n.nspname AS schemaname,
+c.relname AS tablename,
+pg_size_pretty(pg_total_relation_size(indrelid)) as total_size, 
+pg_size_pretty(pg_relation_size(indrelid)) as data_size,
+pg_size_pretty( sum( pg_indexes_size(indrelid))  ) as indxes_size
+FROM 
+((((pg_index x JOIN pg_class c ON c.oid = x.indrelid) JOIN pg_class i ON i.oid = x.indexrelid)JOIN pg_am am ON am.oid=i.relam LEFT JOIN pg_namespace n ON n.oid = c.relnamespace) LEFT JOIN pg_tablespace t ON t.oid = i.reltablespace)
+WHERE
+(c.relkind = ANY (ARRAY['r'::"char", 'm'::"char", 'p'::"char"]) AND i.relkind = ANY (ARRAY['i'::"char", 'I'::"char"]))AND n.nspname not in ('pg_catalog')
+GROUP BY schemaname, tablename, indrelid
+#+end_src
+
+** Replication slots
+
+#+begin_src sql
+SELECT
+  slot_name,
+  case when active then 'True' else 'False' end as "active",
+  active_pid,
+  sr.client_addr,
+  sr.reply_time as "last_reply_time"
+FROM pg_replication_slots rs left join pg_stat_replication sr on rs.active_pid = sr.pid
+ORDER BY 1
+#+end_src
+
+** Current queries grouped by state
+
+#+begin_src sql
+select
+  count(*) as "count",
+  state
+from
+  pg_stat_activity
+where
+  not (query like '%select * from pg_stat_activity%' or state is null)
+group by state;
+#+end_src

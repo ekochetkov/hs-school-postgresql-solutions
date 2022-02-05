@@ -1,0 +1,17 @@
+version: "3.9"
+services:
+
+  db-slave-auto:
+    container_name: db-slave-auto
+    image: aidbox/db:12.1.1-PRO.RC1
+    ports:
+      - 5441:5432
+    environment:
+      # Params for autosetup replica
+      POSTGRES_PASSWORD: postgres
+      PG_SLOT: replica_auto
+      PG_MASTER_HOST: db-master
+      POSTGRES_USER: postgres
+    volumes:
+      - ".:/startup/"
+    entrypoint: "/startup/entry-point.sh" 

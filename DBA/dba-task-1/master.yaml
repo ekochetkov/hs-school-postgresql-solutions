@@ -1,0 +1,12 @@
+version: "3.9"
+services:
+
+  db-master:
+    container_name: db-master
+    image: aidbox/db:12.1.1-PRO.RC1
+    ports:
+      - 5440:5432
+    environment:
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - "./db-slave-pgdata-dir:/db-slave-pgdata-dir"
