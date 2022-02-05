@@ -1,0 +1,36 @@
+#+TITLE: Postgres DBA - 2
+#+AUTHOR: E. Kochetkov @pixfix
+
+* DBA - 2. Prometheus, PG-exporter, Grafana. 
+** Task
+
+1. Install Prometheus and postgresql-exporter
+2. Configure Prometheus for fetching data from pg_exporter
+3. Connect Grafana to Prometheus
+   
+** Postgres->Postgres-Exporter->Prometheus->Grafana
+
+Dashboard screenshot:
+[[./dashboard.jpg]]
+** Build and start all services 
+
+Run command: ~docker-compose up --build~
+
+Services will be started:
++ Postgres
++ Postgres-exporter
++ Prometheus
++ Grafana
+
+Schema of services:
+[[./containers.jpg]]
+
+** Emulate load by pgbench
+
+Run command in postgres-db container:
+
+#+begin_src 
+pgbench -U postgres --initialize --scale=25
+pgbench -U postgres --client=50 --time=60 --progress=1
+#+end_src
+

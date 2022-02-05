@@ -1,0 +1,29 @@
+version: "3.9"
+services:
+
+  postgres-db:
+    container_name: postgres-db
+    image: aidbox/db:12.1.1-PRO.RC1
+    ports:
+      - 5440:5432
+    environment:
+      POSTGRES_PASSWORD: postgres
+      
+  postgres-exporter:
+    container_name: postgres-exporter
+    image: bitnami/postgres-exporter:latest
+    ports:
+        - 9187:9187
+    environment:
+        DATA_SOURCE_NAME: "postgresql://postgres:postgres@postgres-db:5432/?sslmode=disable"  
+  prometheus:
+    container_name: prometheus
+    image: bitnami/prometheus:latest
+    volumes:
+        - "./prometheus.yaml:/etc/prometheus/prometheus.yml"
+
+  grafana:
+    container_name: grafana
+    image: grafana/grafana:latest
+    ports:
+      - 3000:3000
